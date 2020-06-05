@@ -4,6 +4,7 @@ import numpy as np
 from glob import glob
 import os
 
+
 def readFlowFile(filename):
     import struct
     import numpy as np
@@ -30,9 +31,8 @@ def load_data(path):
 
 
 class MyDataset(Dataset):
-    def __init__(self, path, shape=(256, 256), target_scales=(4, 8, 16, 32, 64), transform=None, target_transform=None):
+    def __init__(self, path, shape=(256, 256), transform=None, target_transform=None):
         self.flo_paths, self.img0_paths, self.img1_paths = load_data(path)
-        self.target_scales = target_scales
         self.transform = transform
         self.target_transform = target_transform
         self.shape = shape

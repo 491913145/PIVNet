@@ -24,11 +24,13 @@ from utils import logger
 from torchsummary import summary
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from utils.dataloader import MyDataset
+
 torch.backends.cudnn.benchmark = True
-from utils.multiscaleloss import MultiscaleLoss, realEPE
+from utils.multiscaleloss import MultiscaleLoss, realEPE, RMSE
 from glob import glob
 import cv2 as cv
 from tqdm import tqdm
+from eval import eval
 
 parser = argparse.ArgumentParser(description='PSMNet')
 parser.add_argument('--maxdisp', type=int, default=256,
@@ -53,17 +55,13 @@ parser.add_argument('--ngpus', type=int, default=2,
                     help='number of gpus to use.')
 args = parser.parse_args()
 
-baselr = 1e-3
-batch_size = 32
+baselr = 5e-4
+batch_size = 16
 
 torch.cuda.set_device(1)
 
-
-
-
-
-
 dataset = MyDataset('/home/disk/lihaiyun/LiteFlow/PIV-LiteFlowNet-en/lite/dataset/splits/train', shape=(256, 256))
+test_dataset = MyDataset('/home/disk/lihaiyun/LiteFlow/PIV-LiteFlowNet-en/lite/dataset/splits/test', shape=(256, 256))
 
 print('%d batches per epoch' % (len(dataset) // batch_size))
 
@@ -89,16 +87,19 @@ if args.loadmodel is not None:
         mean_R = pretrained_dict['mean_R']
 
 # print('Number of model parameters: {}'.format(sum([p.data.nelement() for p in model.parameters()])))
-optimizer = optim.Adam(model.parameters(), lr=1e-4, betas=(0.9, 0.999), amsgrad=False)
+optimizer = optim.Adam(model.parameters(), lr=baselr, betas=(0.9, 0.999), amsgrad=False)
 criterion = MultiscaleLoss()
 scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=4, verbose=True)
+TestImgLoader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=True, num_workers=batch_size,
+                                            drop_last=True, pin_memory=True)
 
 
 def train(imgL, imgR, flowl0):
     model.train()
     imgL = Variable(torch.FloatTensor(imgL.float()))
     imgR = Variable(torch.FloatTensor(imgR.float()))
-    flowl0 = Variable(torch.FloatTensor(flowl0.float()))
+    with torch.no_grad():
+        flowl0 = Variable(torch.FloatTensor(flowl0.float()))
 
     imgL, imgR, flowl0 = imgL.cuda(), imgR.cuda(), flowl0.cuda()
     # forward-backward
@@ -114,7 +115,7 @@ def train(imgL, imgR, flowl0):
     vis['output4'] = output[2].detach().cpu().numpy()
     vis['output5'] = output[3].detach().cpu().numpy()
     vis['output6'] = output[4].detach().cpu().numpy()
-    vis['AEPE'] = realEPE(output[0].detach(), flowl0.detach())
+    vis['RMSE'] = RMSE(output[0].detach(), flowl0.detach())
     return loss.data, vis
 
 
@@ -125,10 +126,10 @@ def main():
 
     start_full_time = time.time()
     total_iters = 0
-    start_epoch = 1 if args.resume is None else int(re.findall('(\d+)',args.resume)[0])+1
+    start_epoch = 1 if args.resume is None else int(re.findall('(\d+)', args.resume)[0]) + 1
     for epoch in range(start_epoch, args.epochs + 1):
         total_train_loss = 0
-        total_train_aepe = 0
+        total_train_rmse = 0
 
         # training loop
         for batch_idx, (imgL_crop, imgR_crop, flowl0) in enumerate(TrainImgLoader):
@@ -139,21 +140,25 @@ def main():
             start_time = time.time()
             loss, vis = train(imgL_crop, imgR_crop, flowl0)
             if (total_iters + 1) % 20 == 0:
-                print('Iter %d training loss = %.3f , AEPE = %.3f , time = %.2f' % (
-                total_iters + 1, loss, vis['AEPE'], time.time() - start_time))
+                print('Epoch %d Iter %d training loss = %.3f , RMSE = %.3f , time = %.2f' % (epoch,
+                                                                                             total_iters + 1, loss,
+                                                                                             vis['RMSE'],
+                                                                                             time.time() - start_time))
             total_train_loss += loss
-            total_train_aepe += vis['AEPE']
+            total_train_rmse += vis['RMSE']
             total_iters += 1
 
-        savefilename = args.savemodel + '/' + args.logname + '/finetune_' + str(total_iters) + '.tar'
+        savefilename = args.savemodel + '/' + args.logname + '/finetune_' + str(epoch) + '.tar'
         save_dict = model.state_dict()
         save_dict = collections.OrderedDict(
             {k: v for k, v in save_dict.items() if ('flow_reg' not in k or 'conv1' in k) and ('grid' not in k)})
         torch.save(
-            {'iters': total_iters, 'state_dict': save_dict, 'train_loss': total_train_loss / len(TrainImgLoader), },
+            {'epoch': epoch, 'state_dict': save_dict, 'train_loss': total_train_loss / len(TrainImgLoader), },
             savefilename)
         log.scalar_summary('train/loss', total_train_loss / len(TrainImgLoader), epoch)
-        log.scalar_summary('train/aepe', total_train_aepe / len(TrainImgLoader), epoch)
+        log.scalar_summary('train/RMSE', total_train_rmse / len(TrainImgLoader), epoch)
+        log.scalar_summary('test/RMSE', eval(model, TestImgLoader), epoch)
+        log.scalar_summary('train/learning rate', optimizer.param_groups[0]['lr'], epoch)
         scheduler.step(total_train_loss / len(TrainImgLoader))
 
     print('full finetune time = %.2f HR' % ((time.time() - start_full_time) / 3600))

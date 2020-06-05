@@ -41,9 +41,12 @@ import numpy as np
 #     output = F.adaptive_max_pool2d(input * positive, size) - F.adaptive_max_pool2d(-input * negative, size)
 #     return output
 
+loss_fn = nn.MSELoss(reduce=False,size_average=False)
+
 def EPE(input_flow, target_flow, mean=True):
-    target_flow = target_flow[:, :2]
-    EPE_map = torch.norm(target_flow - input_flow, 2, 1)
+    # EPE_map = torch.sqrt(torch.norm(target_flow - input_flow, 2, 1))
+    # EPE_map = F.smooth_l1_loss(input_flow,target_flow,reduce=False,size_average=False)
+    EPE_map = loss_fn(input_flow,target_flow)
     batch_size = EPE_map.size(0)
     if mean:
         return EPE_map.mean()
@@ -51,7 +54,13 @@ def EPE(input_flow, target_flow, mean=True):
         return EPE_map.sum() / batch_size
 
 
-def multiscaleEPE(network_output, target_flow, weights=(0.005, 0.01, 0.02, 0.08, 0.32)):
+def RMSE(input_flow, target_flow):
+    b, _, h, w = target_flow.size()
+    input_flow = F.interpolate(input_flow, (h, w), mode='bilinear', align_corners=False)
+    return torch.sqrt((target_flow - input_flow).pow(2).mean())
+
+
+def multiscaleEPE(network_output, target_flow, weights=(0.005,0.005, 0.01, 0.02, 0.08, 0.32)):
     def one_scale(output, target):
         b, _, h, w = output.size()
         target_scaled = F.interpolate(target, (h, w), mode='area')
