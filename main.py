@@ -32,6 +32,16 @@ import cv2 as cv
 from tqdm import tqdm
 from eval import eval
 
+def find_NewFile(path):
+    # 获取文件夹中的所有文�?
+    lists = glob(os.path.join(path, '*.tar'))
+    # 对获取的文件根据修改时间进行排序
+    lists.sort(key=lambda x: os.path.getmtime(x))
+    # 把目录和文件名合成一个路�?
+    file_new = lists[-1]
+    return file_new
+
+
 parser = argparse.ArgumentParser(description='PSMNet')
 parser.add_argument('--maxdisp', type=int, default=256,
                     help='maxium disparity, out of range pixels will be masked out. Only affect the coarsest cost volume size')
@@ -55,7 +65,7 @@ parser.add_argument('--ngpus', type=int, default=2,
                     help='number of gpus to use.')
 args = parser.parse_args()
 
-baselr = 5e-4
+baselr = 1e-3
 batch_size = 16
 
 torch.cuda.set_device(1)
@@ -88,9 +98,10 @@ if args.loadmodel is not None:
 
 # print('Number of model parameters: {}'.format(sum([p.data.nelement() for p in model.parameters()])))
 optimizer = optim.Adam(model.parameters(), lr=baselr, betas=(0.9, 0.999), amsgrad=False)
+# optimizer = optim.SGD(model.parameters(), lr=baselr, momentum=0.9,  weight_decay=5e-4)
 criterion = MultiscaleLoss()
 scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=4, verbose=True)
-TestImgLoader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=True, num_workers=batch_size,
+TestImgLoader = torch.utils.data.DataLoader(test_dataset, batch_size=12, shuffle=True, num_workers=12,
                                             drop_last=True, pin_memory=True)
 
 
