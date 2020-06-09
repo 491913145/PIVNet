@@ -10,6 +10,13 @@ from torch.autograd import Variable
 from utils.multiscaleloss import realEPE,RMSE
 from tqdm import tqdm
 from utils.dataloader import MyDataset
+from utils.augmentations import Basetransform
+from utils.flowlib import *
+import torch.nn.functional as F
+
+__all__ = [
+    'eval'
+]
 
 
 def find_NewFile(path):
@@ -33,8 +40,6 @@ def eval(model,ImgLoader):
     print('evaluating... ')
     for i in tqdm(range(step)):
         img1, img2, flo = next(iterator)
-        img1 /= 255
-        img2 /= 255
         img1 = Variable(torch.FloatTensor(img1.float()))
         img2 = Variable(torch.FloatTensor(img2.float()))
         flo = Variable(torch.FloatTensor(flo.float()))
@@ -44,19 +49,3 @@ def eval(model,ImgLoader):
     return np.mean(total_test_rmse)
 
 
-def main():
-    # weight_path = find_NewFile('logname')
-    weight_path = 'logname/finetune_60.tar'
-    model = pwc_dc_net(weight_path)
-    # model = nn.DataParallel(model) #就单GPU走一波吧
-    model.cuda()
-    summary(model, input_size=(1, 1, 256, 256))
-
-    print('load weight: ', weight_path)
-
-    dataset = MyDataset('/home/disk/lihaiyun/LiteFlow/PIV-LiteFlowNet-en/lite/dataset/splits/test', shape=(256, 256))
-    ImgLoader = torch.utils.data.DataLoader(dataset, batch_size=12, num_workers=12, shuffle=True, pin_memory=True)
-    rmse = eval(model,ImgLoader)
-    print("RMSE: ",rmse)
-
-# main()

@@ -547,6 +547,22 @@ def read_flo_file(filename):
     return flow
 
 
+def plotFlow_Li(flow):
+    u,v = flow[:,:,0],flow[:,:,1]
+
+    s = np.array(u.shape)
+    rSize = int(min(s / 40))
+
+    scale = 80
+
+    X, Y = u.shape[:2]
+    x, y = np.meshgrid(range(0, X, rSize), range(0, Y, rSize));
+    u_plot = u[x[0]][:, x[0]]
+    v_plot = v[x[0]][:, x[0]]
+
+    plt.quiver(x, y, u_plot, -v_plot, headwidth=3)
+
+
 def read_png_file(flow_file):
     """
     Read from KITTI .png file

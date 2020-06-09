@@ -24,13 +24,14 @@ from utils import logger
 from torchsummary import summary
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from utils.dataloader import MyDataset
-
+from utils.augmentations import Augmentation, Basetransform
 torch.backends.cudnn.benchmark = True
 from utils.multiscaleloss import MultiscaleLoss, realEPE, RMSE
 from glob import glob
 import cv2 as cv
 from tqdm import tqdm
 from eval import eval
+
 
 def find_NewFile(path):
     # 获取文件夹中的所有文�?
@@ -70,8 +71,10 @@ batch_size = 16
 
 torch.cuda.set_device(1)
 
-dataset = MyDataset('/home/disk/lihaiyun/LiteFlow/PIV-LiteFlowNet-en/lite/dataset/splits/train', shape=(256, 256))
-test_dataset = MyDataset('/home/disk/lihaiyun/LiteFlow/PIV-LiteFlowNet-en/lite/dataset/splits/test', shape=(256, 256))
+dataset = MyDataset('/home/disk/lihaiyun/LiteFlow/PIV-LiteFlowNet-en/lite/dataset/splits/train',
+                    transform=Augmentation(size=256, mean=(128)))
+test_dataset = MyDataset('/home/disk/lihaiyun/LiteFlow/PIV-LiteFlowNet-en/lite/dataset/splits/test',
+                         transform=Basetransform(size=256, mean=(128)))
 
 print('%d batches per epoch' % (len(dataset) // batch_size))
 
@@ -80,23 +83,8 @@ from models.PWCNet import pwc_dc_net
 model = pwc_dc_net(args.resume)
 # model = nn.DataParallel(model) #就单GPU走一波吧
 model.cuda()
-summary(model, input_size=(1, 1, 256, 256))
+summary(model, input_size=(2, 3, 256, 256))
 
-if args.loadmodel is not None:
-    pretrained_dict = torch.load(args.loadmodel)
-    pretrained_dict['state_dict'] = {k: v for k, v in pretrained_dict['state_dict'].items()}
-
-    model.load_state_dict(pretrained_dict['state_dict'], strict=False)
-    if args.retrain == 'true':
-        print('re-training')
-    else:
-        with open('./iter_counts-%d.txt' % int(args.logname.split('-')[-1]), 'r') as f:
-            total_iters = int(f.readline())
-        print('resuming from %d' % total_iters)
-        mean_L = pretrained_dict['mean_L']
-        mean_R = pretrained_dict['mean_R']
-
-# print('Number of model parameters: {}'.format(sum([p.data.nelement() for p in model.parameters()])))
 optimizer = optim.Adam(model.parameters(), lr=baselr, betas=(0.9, 0.999), amsgrad=False)
 # optimizer = optim.SGD(model.parameters(), lr=baselr, momentum=0.9,  weight_decay=5e-4)
 criterion = MultiscaleLoss()
@@ -136,29 +124,23 @@ def main():
     log = logger.Logger(args.savemodel, name=args.logname)
 
     start_full_time = time.time()
-    total_iters = 0
     start_epoch = 1 if args.resume is None else int(re.findall('(\d+)', args.resume)[0]) + 1
+    total_iters = 0
     for epoch in range(start_epoch, args.epochs + 1):
         total_train_loss = 0
         total_train_rmse = 0
-
         # training loop
         for batch_idx, (imgL_crop, imgR_crop, flowl0) in enumerate(TrainImgLoader):
-
-            imgL_crop /= 255
-            imgR_crop /= 255
-
             start_time = time.time()
             loss, vis = train(imgL_crop, imgR_crop, flowl0)
             if (total_iters + 1) % 20 == 0:
-                print('Epoch %d Iter %d training loss = %.3f , RMSE = %.3f , time = %.2f' % (epoch,
-                                                                                             total_iters + 1, loss,
+                print('Epoch %d Iter %d/%d training loss = %.3f , RMSE = %.3f , time = %.2f' % (epoch,
+                                                                                             batch_idx,len(TrainImgLoader), loss,
                                                                                              vis['RMSE'],
                                                                                              time.time() - start_time))
             total_train_loss += loss
             total_train_rmse += vis['RMSE']
             total_iters += 1
-
         savefilename = args.savemodel + '/' + args.logname + '/finetune_' + str(epoch) + '.tar'
         save_dict = model.state_dict()
         save_dict = collections.OrderedDict(

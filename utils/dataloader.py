@@ -31,23 +31,16 @@ def load_data(path):
 
 
 class MyDataset(Dataset):
-    def __init__(self, path, shape=(256, 256), transform=None, target_transform=None):
+    def __init__(self, path,  transform=None):
         self.flo_paths, self.img0_paths, self.img1_paths = load_data(path)
         self.transform = transform
-        self.target_transform = target_transform
-        self.shape = shape
 
     def __getitem__(self, i):
-        img1 = cv.resize(cv.imread(self.img0_paths[i], cv.IMREAD_GRAYSCALE), self.shape)[:, :, np.newaxis].transpose(2,
-                                                                                                                     0,
-                                                                                                                     1)
-        img2 = cv.resize(cv.imread(self.img1_paths[i], cv.IMREAD_GRAYSCALE), self.shape)[:, :, np.newaxis].transpose(2,
-                                                                                                                     0,
-                                                                                                                     1)
-        flo = readFlowFile(self.flo_paths[i]).transpose((2, 0, 1))
+        img1 = cv.imread(self.img0_paths[i])
+        img2 = cv.imread(self.img1_paths[i])
+        flo = readFlowFile(self.flo_paths[i])
         if self.transform is not None:
-            img1 = self.transform(img1)
-            img2 = self.transform(img2)
+            img1,img2,flo = self.transform(img1,img2,flo)
         return img1, img2, flo
 
     def __len__(self):
