@@ -60,7 +60,7 @@ def RMSE(input_flow, target_flow):
     return torch.sqrt((target_flow - input_flow).pow(2).mean())
 
 
-def multiscaleEPE(network_output, target_flow, weights=(0.005, 0.01, 0.02, 0.08, 0.32)):
+def multiscaleEPE(network_output, target_flow, weights=(0.005,0.005, 0.01, 0.02, 0.08, 0.32)):
     def one_scale(output, target):
         b, _, h, w = output.size()
         target_scaled = F.interpolate(target, (h, w), mode='area')

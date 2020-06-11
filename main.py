@@ -119,7 +119,7 @@ def train(imgL, imgR, flowl0):
 
 
 def main():
-    TrainImgLoader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=batch_size,
+    TrainImgLoader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=1,
                                                  drop_last=True, pin_memory=True)
     log = logger.Logger(args.savemodel, name=args.logname)
 

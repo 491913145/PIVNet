@@ -222,6 +222,27 @@ class RandomRotate(object):
             flo[:, :, 0] = -flo[:, :, 0]
         return img1.copy(),img2.copy(),flo.copy()
 
+class RandomGasuss(object):
+    def __init__(self, mean=0, var=0.001):
+        self.mean=mean
+        self.var = var
+    def __call__(self, img1, img2, flo):
+        cv2.namedWindow('s',cv2.WINDOW_FREERATIO)
+        cv2.imshow('s',img1)
+        cv2.waitKey()
+        img1 = img1.astype(np.float)/255
+        img2 = img2.astype(np.float)/255
+        noise = np.random.normal(self.mean, self.var, img1.shape)
+        img1 = img1 + noise
+        img1 = (img1*255).astype(np.uint8)
+        noise = np.random.normal(self.mean, self.var, img2.shape)
+        img2 = img2 + noise
+        img2 = (img2*255).astype(np.uint8)
+        img1 = np.clip(img1, 0, 255)
+        img2 = np.clip(img2, 0, 255)
+        cv2.imshow('s',img1)
+        cv2.waitKey()
+        return img1, img2, flo
 
 class Augmentation(object):
     def __init__(self, size=256, mean=(128)):

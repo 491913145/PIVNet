@@ -4,7 +4,7 @@ implementation of the PWC-DC network for optical flow estimation by Sun et al., 
 Jinwei Gu and Zhile Ren
 
 """
-
+import torch.nn.functional as F
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
@@ -17,6 +17,104 @@ import numpy as np
 __all__ = [
     'pwc_dc_net'
 ]
+
+class Flatten(nn.Module):
+
+    def forward(self, x):
+
+        return x.view(x.size(0), -1)
+
+class ChannelGate(nn.Module):
+
+    def __init__(self, gate_channel, reduction_ratio=16, num_layers=1):
+
+        super(ChannelGate, self).__init__()
+
+        self.gate_c = nn.Sequential()
+
+        # after avg_pool
+
+        self.gate_c.add_module('flatten', Flatten())
+
+        gate_channels = [gate_channel]
+
+        gate_channels += [gate_channel // reduction_ratio] * num_layers
+
+        gate_channels += [gate_channel]
+
+        for i in range(len(gate_channels) - 2):
+
+            # fc->bn
+
+            self.gate_c.add_module('gate_c_fc_%d'%i, nn.Linear(gate_channels[i], gate_channels[i+1]))
+
+            self.gate_c.add_module('gate_c_bn_%d'%(i+1), nn.BatchNorm1d(gate_channels[i+1]))
+
+            self.gate_c.add_module('gate_c_relu_%d'%(i+1), nn.ReLU())
+
+        # final_fc
+
+        self.gate_c.add_module('gate_c_fc_final', nn.Linear(gate_channels[-2], gate_channels[-1]))
+
+    def forward(self, in_tensor):
+
+        # Global avg pool
+
+        avg_pool = F.avg_pool2d(in_tensor, in_tensor.size(2), stride=in_tensor.size(2))
+
+        # C∗H∗W -> C*1*1 -> C*H*W
+
+        return self.gate_c(avg_pool).unsqueeze(2).unsqueeze(3).expand_as(in_tensor)
+
+class SpatiaGate(nn.Module):
+
+    # dilation value and reduction ratio, set d = 4 r = 16
+
+    def __init__(self, gate_channel, reduction_ratio=16, dilation_conv_num=2, dilation_val=4):
+        super(SpatiaGate, self).__init__()
+
+        self.gate_s = nn.Sequential()
+
+        # 1x1 + (3x3)*2 + 1x1
+
+        self.gate_s.add_module('gate_s_conv_reduce0', nn.Conv2d(gate_channel, gate_channel // reduction_ratio, kernel_size=1))
+
+        self.gate_s.add_module('gate_s_bn_reduce0', nn.BatchNorm2d(gate_channel // reduction_ratio))
+
+        self.gate_s.add_module('gate_s_relu_reduce0', nn.ReLU())
+
+        for i in range(dilation_conv_num):
+
+            self.gate_s.add_module('gate_s_conv_di_%d' % i, nn.Conv2d(gate_channel // reduction_ratio, gate_channel // reduction_ratio,
+
+                                                            kernel_size=3, padding=dilation_val, dilation=dilation_val))
+
+            self.gate_s.add_module('gate_s_bn_di_%d' % i, nn.BatchNorm2d(gate_channel // reduction_ratio))
+
+            self.gate_s.add_module('gate_s_relu_di_%d' % i, nn.ReLU())
+
+        self.gate_s.add_module('gate_s_conv_final', nn.Conv2d(gate_channel // reduction_ratio, 1, kernel_size=1))  # 1×H×W
+
+    def forward(self, in_tensor):
+
+        return self.gate_s(in_tensor).expand_as(in_tensor)
+
+
+class BAM(nn.Module):
+
+    def __init__(self, gate_channel):
+
+        super(BAM, self).__init__()
+
+        self.channel_att = ChannelGate(gate_channel)
+
+        self.spatial_att = SpatiaGate(gate_channel)
+
+    def forward(self, in_tensor):
+
+        att = 1 + F.sigmoid(self.channel_att(in_tensor) * self.spatial_att(in_tensor))
+
+        return att * in_tensor
 
 
 def conv(in_planes, out_planes, kernel_size=3, stride=1, padding=1, dilation=1):
@@ -50,30 +148,31 @@ class PWCDCNet(nn.Module):
 
         channel = [3,16,16,16,32,32,32,64,64,64,96,96,96,128,128,128,196,196,196]
 
+        self.bam = BAM
+
         self.netC = []
         for i in range(len(channel)-1):
             self.netC += [conv(channel[i], channel[i+1], kernel_size=3, stride=1 if i%3 else 2)]
         self.netC = nn.ModuleList(self.netC)
 
         self.corr = Correlation()
-        self.leakyRELU = nn.LeakyReLU(0.1)
+        self.leakyRELU = nn.LeakyReLU(0.1, inplace=True)
 
         nd = (2 * md + 1) ** 2
-        dd = np.array([128, 128, 96, 64, 32])
+        dd = np.array([128, 96,64,32])
 
         self.netE = []
 
         od = nd
-        for i in range(5):
+        for i in range(6):
             block = []
             block += [conv(od, dd[0], kernel_size=3, stride=1)]
             block += [conv(dd[0], dd[1], kernel_size=3, stride=1)]
             block += [conv(dd[1], dd[2], kernel_size=3, stride=1)]
             block += [conv(dd[2], dd[3], kernel_size=3, stride=1)]
-            block += [conv(dd[3], dd[4], kernel_size=3, stride=1)]
-            block += [predict_flow(dd[4])]
+            block += [self.bam(dd[3])]
+            block += [predict_flow(dd[3])]
             block += [deconv(2, 2, kernel_size=4, stride=2, padding=1)]
-            block += [deconv(dd[4], 2, kernel_size=4, stride=2, padding=1)]
             self.netE += [nn.ModuleList(block)]
         self.netE = nn.ModuleList(self.netE)
 
@@ -143,21 +242,23 @@ class PWCDCNet(nn.Module):
             im2 = self.netC[i+2](im2)
             feats += [im1,im2]
 
+        ratio = [0.625,1.25,2.5,5,10,20]
         feats = feats[::-1]
         corr = self.corr(feats[0], feats[1])
         corr = self.leakyRELU(corr)
-        ratio = [0.625,1.25,2.5,5,10]
         flows = []
         for i in range(len(self.netE)):
             x = corr
             for c in self.netE[i][:-2]:
                 x = c(x)
-            flows += [x]
-            up_flow = self.netE[i][-2](x)
-            warp = self.warp(feats[2*(i+1)+1], up_flow * ratio[i])
+            flow = self.netE[i][-2](x)
+            flows += [flow]
+            if i == len(self.netE) - 1:
+                break
+            flow = self.netE[i][-1](flow)
+            warp = self.warp(feats[2*(i+1)+1], flow * ratio[i])
             corr = self.corr(feats[2*(i+1)], warp)
             corr = self.leakyRELU(corr)
-
         if self.training:
             return flows[::-1]
         else:
